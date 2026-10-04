@@ -2408,6 +2408,57 @@ defmodule LangChain.ChatModels.ChatOpenAITest do
                %ContentPart{type: :text, content: "9.9 is larger."}
              ] = merged.merged_content
     end
+
+    test "keeps both halves of a chunk that carries thinking and answer", %{model: model} do
+      # xAI's Grok sends the last of the thinking and the first of the answer
+      # in one chunk, and leaves `reasoning_content` off the answer chunks
+      # after it.
+      chunks = [
+        %{
+          "delta" => %{"role" => "assistant", "reasoning_content" => "I will greet Ada by"},
+          "index" => 0
+        },
+        %{
+          "delta" => %{"content" => "Hi", "reasoning_content" => " name in one short sentence."},
+          "index" => 0
+        },
+        %{"delta" => %{"content" => " Ada,"}, "index" => 0},
+        %{"delta" => %{"content" => " great to see you!"}, "finish_reason" => "stop", "index" => 0}
+      ]
+
+      merged =
+        chunks
+        |> Enum.map(&ChatOpenAI.do_process_response(model, &1))
+        |> MessageDelta.merge_deltas()
+
+      assert [
+               %ContentPart{
+                 type: :thinking,
+                 content: "I will greet Ada by name in one short sentence."
+               },
+               %ContentPart{type: :text, content: "Hi Ada, great to see you!"}
+             ] = merged.merged_content
+
+      assert merged.status == :complete
+    end
+
+    test "a chunk with thinking and answer splits into a thinking delta, then a text delta",
+         %{model: model} do
+      chunk = %{
+        "delta" => %{"content" => "Hi", "reasoning_content" => " done."},
+        "finish_reason" => "stop",
+        "index" => 0
+      }
+
+      assert [
+               %MessageDelta{
+                 index: 0,
+                 status: :incomplete,
+                 content: %ContentPart{type: :thinking, content: " done."}
+               },
+               %MessageDelta{index: 1, status: :complete, content: "Hi"}
+             ] = ChatOpenAI.do_process_response(model, chunk)
+    end
   end
 
   describe "do_process_response - MessageDeltas" do

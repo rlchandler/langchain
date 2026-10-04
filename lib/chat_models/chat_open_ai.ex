@@ -1337,6 +1337,29 @@ defmodule LangChain.ChatModels.ChatOpenAI do
   # `index` selects the position to merge into, so this repurposes the choice
   # index. A request asking for multiple choices from a reasoning model would
   # collapse them together.
+  #
+  # Some providers (xAI's Grok) send the last of the thinking and the first of
+  # the answer in one chunk. That chunk becomes two deltas, thinking then text,
+  # so neither half is dropped; the text delta carries the finish reason and
+  # any tool calls, so the message completes after both have merged.
+  def do_process_response(
+        model,
+        %{"delta" => %{"reasoning_content" => reasoning, "content" => text} = delta_body} = msg
+      )
+      when is_binary(reasoning) and reasoning != "" and is_binary(text) and text != "" do
+    thinking_body = Map.take(delta_body, ["role", "reasoning_content"])
+
+    text_body =
+      delta_body
+      |> Map.delete("role")
+      |> Map.put("reasoning_content", nil)
+
+    [
+      do_process_response(model, %{msg | "delta" => thinking_body} |> Map.delete("finish_reason")),
+      do_process_response(model, %{msg | "delta" => text_body})
+    ]
+  end
+
   def do_process_response(
         model,
         %{"delta" => %{"reasoning_content" => _} = delta_body} = msg
